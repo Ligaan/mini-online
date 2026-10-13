@@ -37,6 +37,9 @@ int main(){
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &from.sin_addr, ip,sizeof(ip));
         std::printf("%zd bytes from %s:%d\n", n, ip, ntohs(from.sin_port));
+        if(sendto(fd, buf,n, 0, (sockaddr*)&from, fromLen)){
+            perror("sendto");
+        }
     }
 
     close(fd);
