@@ -4,6 +4,18 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstring>
+#include <poll.h>
+#include <chrono>
+#include <cstdint>
+
+struct InputPacket {
+    uint32_t seq;
+    int8_t dx;
+    int8_t dy;
+};
+
+using Clock = std::chrono::steady_clock;
+constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz
 
 
 int main(){
@@ -18,19 +30,48 @@ int main(){
     addr.sin_family = AF_INET;
     addr.sin_port = htons(9000);  
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-    
-    const char* buf= "Hello Server";
-    if(sendto(fd, buf,std::strlen(buf), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
-        perror("sendto");
-    }
-    std::printf("sent\n");
 
-    char reply[1500];
-    ssize_t n = recvfrom(fd, reply, sizeof(reply), 0, nullptr, nullptr);
-    if (n < 0){
-        perror("recvfrom");
+    InputPacket pkt{};
+    auto nextTick = Clock::now() + TICK;
+    uint64_t tickCount = 0;
+
+    while (tickCount < 150){
+        pollfd pfd{};
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        auto untilTick = std::chrono::duration_cast<std::chrono::milliseconds>(nextTick - Clock::now()).count();
+        int timeoutMs = untilTick > 0 ? (int) untilTick : 0;
+        int ready = poll(&pfd, 1, timeoutMs);
+
+        if(ready < 0){
+            perror("poll");
+            break;
+        }
+
+        if(ready > 0){
+            char reply[1500];
+            ssize_t n = recvfrom(fd, reply, sizeof(reply), 0, nullptr, nullptr);
+            if (n < 0){
+                perror("recvfrom");
+            }
+            if(n > 0){
+                std::printf("reply: %.*s\n", (int)n, reply);
+            }
+
+        }
+        if(Clock::now() >= nextTick){
+            nextTick += TICK;
+            ++tickCount;
+            pkt.seq = tickCount;
+            pkt.dx = 1;
+            pkt.dy = 0;
+            if(sendto(fd, &pkt, sizeof(pkt), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
+                perror("sendto");
+            }
+
+        }
     }
-    std::printf("reply: %.*s\n", (int)n, reply);
+
     close(fd);
     return 0;
 }
