@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <chrono>
 #include <cstdint>
+#include <poll.h>
 
 struct ClientInfo {
     sockaddr_in addr;
@@ -36,29 +37,54 @@ int main(){
 
     std::unordered_map<uint64_t, ClientInfo> clients;
     while(true){
-        sockaddr_in from{};
-        socklen_t fromLen = sizeof(from);
-        
-        ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen);
-        if (n < 0){
-            perror("recvfrom");
+        pollfd pfd{};
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        int ready = poll(&pfd, 1, 1000);
+
+        if(ready < 0){
+            perror("poll");
             break;
         }
-        uint64_t key = ((uint64_t)from.sin_addr.s_addr << 16) | from.sin_port;
-        
-        char ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &from.sin_addr, ip,sizeof(ip));
-        std::printf("%zd bytes from %s:%d\n", n, ip, ntohs(from.sin_port));
-        if(sendto(fd, buf,n, 0, (sockaddr*)&from, fromLen) < 0){
-            perror("sendto");
+
+        if(ready > 0){
+
+            sockaddr_in from{};
+            socklen_t fromLen = sizeof(from);
+            
+            ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen);
+            if (n < 0){
+                perror("recvfrom");
+                break;
+            }
+            uint64_t key = ((uint64_t)from.sin_addr.s_addr << 16) | from.sin_port;
+            
+            char ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &from.sin_addr, ip,sizeof(ip));
+            std::printf("%zd bytes from %s:%d\n", n, ip, ntohs(from.sin_port));
+            if(sendto(fd, buf,n, 0, (sockaddr*)&from, fromLen) < 0){
+                perror("sendto");
+            }
+            auto now = std::chrono::steady_clock::now();
+
+            
+            if(clients.find(key) == clients.end()){
+                std::printf("New client: %s:%d\n", ip, ntohs(from.sin_port));
+            }
+            
+            clients[key] = ClientInfo{from, now};
         }
+        
         auto now = std::chrono::steady_clock::now();
 
-        if(clients.find(key) == clients.end()){
-            std::printf("New client: %s:%d\n", ip, ntohs(from.sin_port));
+        for(auto it = clients.begin();it != clients.end();){
+            if(now - it->second.lastSeen > std::chrono::seconds(10)){
+                std::printf("client timed out\n");
+                it = clients.erase(it);
+            }else{
+                ++it;
+            }
         }
-
-        clients[key] = ClientInfo{from, now};
     }
 
     close(fd);
