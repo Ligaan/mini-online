@@ -8,10 +8,15 @@
 #include <cstdint>
 #include <poll.h>
 
+
 struct ClientInfo {
     sockaddr_in addr;
     std::chrono::steady_clock::time_point lastSeen;
 };
+
+using Clock = std::chrono::steady_clock;
+constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz
+constexpr uint64_t SNAPSHOT_EVERY = 30;
 
 int main(){
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -36,11 +41,17 @@ int main(){
     char buf[1500];
 
     std::unordered_map<uint64_t, ClientInfo> clients;
+
+    auto nextTick = Clock::now() + TICK;
+    uint64_t tickCount = 0;
+
     while(true){
         pollfd pfd{};
         pfd.fd = fd;
         pfd.events = POLLIN;
-        int ready = poll(&pfd, 1, 1000);
+        auto untilTick = std::chrono::duration_cast<std::chrono::milliseconds>(nextTick - Clock::now()).count();
+        int timeoutMs = untilTick > 0 ? (int) untilTick : 0;
+        int ready = poll(&pfd, 1, timeoutMs);
 
         if(ready < 0){
             perror("poll");
@@ -83,6 +94,21 @@ int main(){
                 it = clients.erase(it);
             }else{
                 ++it;
+            }
+        }
+
+        if(Clock::now() >= nextTick){
+            nextTick += TICK;
+            ++tickCount;
+            if(tickCount % SNAPSHOT_EVERY == 0){
+                std::printf("tick %llu\n",(unsigned long long)tickCount);
+                char msg[128];
+                int len = std::snprintf(msg, sizeof(msg),"snapshot tick=%llu clients=%zu\n",(unsigned long long)tickCount, clients.size());
+                for(auto it = clients.begin();it != clients.end(); ++it){
+                    if(sendto(fd, msg,len, 0, (sockaddr*)&it->second.addr, sizeof(it->second.addr)) < 0){
+                        perror("sendto");
+                    }
+                }
             }
         }
     }
