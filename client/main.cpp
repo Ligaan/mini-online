@@ -8,11 +8,7 @@
 #include <chrono>
 #include <cstdint>
 
-struct InputPacket {
-    uint32_t seq;
-    int8_t dx;
-    int8_t dy;
-};
+#include "protocol.h"
 
 using Clock = std::chrono::steady_clock;
 constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz

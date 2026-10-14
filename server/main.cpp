@@ -7,6 +7,9 @@
 #include <chrono>
 #include <cstdint>
 #include <poll.h>
+#include <cstring>
+
+#include "protocol.h"
 
 
 struct ClientInfo {
@@ -68,6 +71,19 @@ int main(){
                 perror("recvfrom");
                 break;
             }
+
+            if (n != sizeof(InputPacket)){
+                std::printf("Bad Packet\n");
+                continue;
+            }
+
+            InputPacket in;
+            std::memcpy(&in, buf, sizeof(in));
+
+            if(in.seq % 30 == 0){
+                std::printf("InputPacket seq=%u dx=%d dy=%d\n", in.seq, in.dx, in.dy);
+            }
+
             uint64_t key = ((uint64_t)from.sin_addr.s_addr << 16) | from.sin_port;
             
             char ip[INET_ADDRSTRLEN];
