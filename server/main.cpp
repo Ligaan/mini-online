@@ -15,14 +15,15 @@
 struct ClientInfo {
     sockaddr_in addr;
     std::chrono::steady_clock::time_point lastSeen;
+    float x = 0.0f, y = 0.0f;
+    uint32_t lastSeq = 0;
 };
 
 using Clock = std::chrono::steady_clock;
 constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz
-constexpr uint64_t SNAPSHOT_EVERY = 30;
 
 int main(){
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0){
         perror("socket");
@@ -99,8 +100,16 @@ int main(){
             if(clients.find(key) == clients.end()){
                 std::printf("New client: %s:%d\n", ip, ntohs(from.sin_port));
             }
-            
-            clients[key] = ClientInfo{from, now};
+            auto& c = clients[key];
+            c.addr = from;
+            c.lastSeen = now;
+
+            if (in.seq <= c.lastSeq){
+                continue;
+            }
+
+            applyInput(c.x, c.y, in.dx, in.dy);
+            c.lastSeq = in.seq;
         }
 
         auto nowSweep = std::chrono::steady_clock::now();
@@ -117,14 +126,18 @@ int main(){
         if(Clock::now() >= nextTick){
             nextTick += TICK;
             ++tickCount;
-            if(tickCount % SNAPSHOT_EVERY == 0){
+            if(tickCount % 30 == 0){
                 std::printf("tick %llu\n",(unsigned long long)tickCount);
-                char msg[128];
-                int len = std::snprintf(msg, sizeof(msg),"snapshot tick=%llu clients=%zu\n",(unsigned long long)tickCount, clients.size());
-                for(auto it = clients.begin();it != clients.end(); ++it){
-                    if(sendto(fd, msg,len, 0, (sockaddr*)&it->second.addr, sizeof(it->second.addr)) < 0){
-                        perror("sendto");
-                    }
+            }
+            for(const auto& entry: clients){
+                const ClientInfo& c = entry.second;
+                StatePacket st{};
+                st.tick = (uint32_t)tickCount;
+                st.lastSeq = c.lastSeq;
+                st.x = c.x;
+                st.y = c.y;
+                if(sendto(fd, &st,sizeof(st), 0, (sockaddr*)&c.addr, sizeof(c.addr)) < 0){
+                    perror("sendto");
                 }
             }
         }

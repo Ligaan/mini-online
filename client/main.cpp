@@ -7,6 +7,8 @@
 #include <poll.h>
 #include <chrono>
 #include <cstdint>
+#include <deque>
+#include <cmath>
 
 #include "protocol.h"
 
@@ -29,8 +31,12 @@ int main(int argc, char** argv){
     inet_pton(AF_INET, serverIp, &addr.sin_addr);
 
     InputPacket pkt{};
+    float px = 0.0f, py = 0.0f;
+    std::deque<InputPacket> pending;
     auto nextTick = Clock::now() + TICK;
     uint64_t tickCount = 0;
+    StatePacket st{};
+    uint32_t lastAck = 0;
 
     while (tickCount < 1500){
         pollfd pfd{};
@@ -51,8 +57,29 @@ int main(int argc, char** argv){
             if (n < 0){
                 perror("recvfrom");
             }
-            if(n > 0){
-                std::printf("reply: %.*s\n", (int)n, reply);
+            if(n != sizeof(StatePacket)){
+                std::printf("Bad Packet\n");
+                continue;
+            }
+            memcpy(&st, reply, sizeof(st));
+            if (st.lastSeq < lastAck) continue;
+            lastAck = st.lastSeq;
+            while(!pending.empty() && pending.front().seq <= st.lastSeq){
+                pending.pop_front();
+            }
+            float oldX = px;
+            px = st.x;
+            py = st.y;
+            for (const auto& p: pending){
+                applyInput(px, py, p.dx, p.dy);
+            }
+            float err = oldX - px;
+            if (fabsf(err)>0.001f){
+                std::printf("correction dx=%.3f\n",err);
+            }
+
+            if(st.tick % 30 == 0){
+                std::printf("server x=%.2f ack=%u | predicted x=%.2f seq=%u\n", st.x, st.lastSeq, px, (uint32_t)tickCount);
             }
 
         }
@@ -62,6 +89,8 @@ int main(int argc, char** argv){
             pkt.seq = tickCount;
             pkt.dx = 1;
             pkt.dy = 0;
+            applyInput(px, py, pkt.dx, pkt.dy);
+            pending.push_back(pkt);
             if(sendto(fd, &pkt, sizeof(pkt), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
                 perror("sendto");
             }
