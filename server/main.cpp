@@ -17,6 +17,7 @@ struct ClientInfo {
     std::chrono::steady_clock::time_point lastSeen;
     float x = 0.0f, y = 0.0f;
     uint32_t lastSeq = 0;
+    uint32_t id = 0;
 };
 
 using Clock = std::chrono::steady_clock;
@@ -49,6 +50,7 @@ int main(){
 
     auto nextTick = Clock::now() + TICK;
     uint64_t tickCount = 0;
+    uint32_t nextId = 1;
 
     while(true){
         pollfd pfd{};
@@ -101,6 +103,8 @@ int main(){
                 std::printf("New client: %s:%d\n", ip, ntohs(from.sin_port));
             }
             auto& c = clients[key];
+            if(c.id == 0)
+                c.id = nextId++;
             c.addr = from;
             c.lastSeen = now;
 
@@ -123,23 +127,48 @@ int main(){
             }
         }
 
+        
         if(Clock::now() >= nextTick){
             nextTick += TICK;
             ++tickCount;
             if(tickCount % 30 == 0){
                 std::printf("tick %llu\n",(unsigned long long)tickCount);
             }
+            
+            SnapshotPacket snap{};
+            snap.tick = (uint32_t)tickCount;
             for(const auto& entry: clients){
                 const ClientInfo& c = entry.second;
-                StatePacket st{};
-                st.tick = (uint32_t)tickCount;
-                st.lastSeq = c.lastSeq;
-                st.x = c.x;
-                st.y = c.y;
-                if(sendto(fd, &st,sizeof(st), 0, (sockaddr*)&c.addr, sizeof(c.addr)) < 0){
-                    perror("sendto");
+                EntityState& e = snap.entities[snap.count++];
+                e.id = c.id;
+                e.x = c.x;
+                e.y = c.y;
+    
+                if(snap.count == MAX_PLAYERS)
+                    break;
+            }
+    
+            for(const auto& entry: clients){
+                const ClientInfo& c = entry.second;
+                SnapshotPacket out = snap;
+                out.lastSeq = c.lastSeq;
+                out.yourId = c.id;
+    
+                if(sendto(fd, &out,sizeof(out), 0, (sockaddr*)&c.addr, sizeof(c.addr)) < 0){
+                        perror("sendto");
                 }
             }
+            // for(const auto& entry: clients){
+            //     const ClientInfo& c = entry.second;
+            //     StatePacket st{};
+            //     st.tick = (uint32_t)tickCount;
+            //     st.lastSeq = c.lastSeq;
+            //     st.x = c.x;
+            //     st.y = c.y;
+            //     if(sendto(fd, &st,sizeof(st), 0, (sockaddr*)&c.addr, sizeof(c.addr)) < 0){
+            //         perror("sendto");
+            //     }
+            // }
         }
     }
 
