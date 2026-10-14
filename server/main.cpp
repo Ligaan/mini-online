@@ -22,6 +22,7 @@ constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz
 constexpr uint64_t SNAPSHOT_EVERY = 30;
 
 int main(){
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0){
         perror("socket");
