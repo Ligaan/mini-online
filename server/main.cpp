@@ -74,11 +74,11 @@ int main(){
             
             clients[key] = ClientInfo{from, now};
         }
-        
-        auto now = std::chrono::steady_clock::now();
+
+        auto nowSweep = std::chrono::steady_clock::now();
 
         for(auto it = clients.begin();it != clients.end();){
-            if(now - it->second.lastSeen > std::chrono::seconds(10)){
+            if(nowSweep - it->second.lastSeen > std::chrono::seconds(10)){
                 std::printf("client timed out\n");
                 it = clients.erase(it);
             }else{
