@@ -14,7 +14,7 @@ using Clock = std::chrono::steady_clock;
 constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz
 
 
-int main(){
+int main(int argc, char** argv){
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0){
         perror("socket");
@@ -25,7 +25,8 @@ int main(){
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(9000);  
-    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    const char* serverIp = argc > 1 ? argv[1] : "127.0.0.1";
+    inet_pton(AF_INET, serverIp, &addr.sin_addr);
 
     InputPacket pkt{};
     auto nextTick = Clock::now() + TICK;
