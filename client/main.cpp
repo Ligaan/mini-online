@@ -32,7 +32,7 @@ int main(int argc, char** argv){
     auto nextTick = Clock::now() + TICK;
     uint64_t tickCount = 0;
 
-    while (tickCount < 150){
+    while (tickCount < 1500){
         pollfd pfd{};
         pfd.fd = fd;
         pfd.events = POLLIN;

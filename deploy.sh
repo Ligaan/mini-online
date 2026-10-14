@@ -6,5 +6,5 @@ DIR=mini-online
 
 rsync -az --delete --exclude build --exclude .git ./ "${HOST}:${DIR}/"
 ssh "$HOST" "cd $DIR && cmake -S . -B build && cmake --build build"
-ssh "$HOST" "sudo systemctl restart mini-online"
+ssh "$HOST" "sudo systemctl try-restart mini-online"
 echo "Deployed"
