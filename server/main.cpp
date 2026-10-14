@@ -148,6 +148,8 @@ int main(){
                     break;
             }
     
+            
+
             for(const auto& entry: clients){
                 const ClientInfo& c = entry.second;
                 SnapshotPacket out = snap;
@@ -158,17 +160,6 @@ int main(){
                         perror("sendto");
                 }
             }
-            // for(const auto& entry: clients){
-            //     const ClientInfo& c = entry.second;
-            //     StatePacket st{};
-            //     st.tick = (uint32_t)tickCount;
-            //     st.lastSeq = c.lastSeq;
-            //     st.x = c.x;
-            //     st.y = c.y;
-            //     if(sendto(fd, &st,sizeof(st), 0, (sockaddr*)&c.addr, sizeof(c.addr)) < 0){
-            //         perror("sendto");
-            //     }
-            // }
         }
     }
 
