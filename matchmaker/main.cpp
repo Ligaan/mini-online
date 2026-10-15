@@ -24,7 +24,9 @@ bool verifyToken(const httplib::Request& req, const std::string& secret, std::st
     std::string token = header.substr(prefix.size());
     try {
         auto decoded = jwt::decode(token);
-        auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{secret});
+        auto verifier = jwt::verify()
+                                .allow_algorithm(jwt::algorithm::hs256{secret})
+                                .with_audience("matchmaker");
         verifier.verify(decoded);
         playerOut = decoded.get_subject();
         return true;
@@ -82,6 +84,7 @@ int main(){
         std::string token = jwt::create()
             .set_type("JWT")
             .set_subject(name)
+            .set_audience("matchmaker")
             .set_issued_at(now)
             .set_expires_at(now + std::chrono::minutes(10))
             .sign(jwt::algorithm::hs256{secret});
