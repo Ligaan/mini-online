@@ -23,6 +23,18 @@ struct Sample {
 constexpr double INTERP_DELAY = 3.0;
 
 int main(int argc, char** argv){
+
+    if(argc < 3){
+        std::printf("usage: client <server-ip> <ticket>\n");
+        return 1;
+    }
+    JoinPacket jp{};
+    jp.type = PKT_JOIN;
+    std::strncpy(jp.ticket, argv[2], sizeof(jp.ticket) - 1);
+    bool joined = false;
+    InputPacket pkt{};
+    pkt.type = PKT_INPUT;
+
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0){
         perror("socket");
@@ -36,7 +48,6 @@ int main(int argc, char** argv){
     const char* serverIp = argc > 1 ? argv[1] : "127.0.0.1";
     inet_pton(AF_INET, serverIp, &addr.sin_addr);
 
-    InputPacket pkt{};
     float px = 0.0f, py = 0.0f;
     std::deque<InputPacket> pending;
     std::unordered_map<uint32_t, std::deque<Sample>> remotes;
@@ -82,6 +93,7 @@ int main(int argc, char** argv){
             if (snap.count > MAX_PLAYERS)
                 continue;
 
+            joined = true;
             snapsRecv++;
 
             const EntityState* me = nullptr;
@@ -152,20 +164,26 @@ int main(int argc, char** argv){
         if(Clock::now() >= nextTick){
             nextTick += TICK;
             ++tickCount;
-            pkt.seq = tickCount;
-            pkt.dx = ((tickCount / 90) % 2 == 0) ? 1 : -1;
-            pkt.dy = 0;
 
+            if(!joined){
+                if(sendto(fd,&jp,sizeof(jp),0,(sockaddr*)&addr, sizeof(addr))<0)
+                    perror("sendto");
+            }else{
+
+                pkt.seq = tickCount;
+                pkt.dx = ((tickCount / 90) % 2 == 0) ? 1 : -1;
+                pkt.dy = 0;
+                
+                applyInput(px, py, pkt.dx, pkt.dy);
+                pending.push_back(pkt);
+                if (pending.size() > 120) pending.pop_front();
+                if(sendto(fd, &pkt, sizeof(pkt), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
+                    perror("sendto");
+                }
+            }
             double elapsed = std::chrono::duration<double>(Clock::now()-lastRecvTime).count();
             double serverNow = lastSnapTick + elapsed * 30.0;
             double renderTick = serverNow - INTERP_DELAY;
-
-            applyInput(px, py, pkt.dx, pkt.dy);
-            pending.push_back(pkt);
-            if (pending.size() > 120) pending.pop_front();
-            if(sendto(fd, &pkt, sizeof(pkt), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
-                perror("sendto");
-            }
 
             for (auto& remote:remotes){
                 if (remote.second.empty()) continue;

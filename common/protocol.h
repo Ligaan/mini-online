@@ -1,7 +1,18 @@
 #pragma once
 #include <cstdint>
 
+enum : uint8_t {
+    PKT_JOIN = 1,
+    PKT_INPUT = 2
+};
+
+struct JoinPacket{
+    uint8_t type;
+    char ticket[512];
+};
+
 struct InputPacket {
+    uint8_t type;
     uint32_t seq;
     int8_t dx;
     int8_t dy;

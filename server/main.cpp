@@ -8,9 +8,11 @@
 #include <cstdint>
 #include <poll.h>
 #include <cstring>
+#include <string>
+#include <cstdlib>
 
 #include "protocol.h"
-
+#include "jwt-cpp/jwt.h"
 
 struct ClientInfo {
     sockaddr_in addr;
@@ -18,12 +20,31 @@ struct ClientInfo {
     float x = 0.0f, y = 0.0f;
     uint32_t lastSeq = 0;
     uint32_t id = 0;
+    std::string player;
 };
 
 using Clock = std::chrono::steady_clock;
 constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz
 
+bool verifyTicket(const std::string& token, const std::string& secret, std::string& playerOut, std::string& sidOut){
+    try{
+        auto decoded = jwt::decode(token);
+        auto verifier = jwt::verify()
+            .allow_algorithm(jwt::algorithm::hs256{secret})
+            .with_audience("game-server");
+        verifier.verify(decoded);
+        playerOut = decoded.get_subject();
+        sidOut = decoded.get_payload_claim("sid").as_string();
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 int main(){
+    const char* envSecret = std::getenv("MM_SECRET");
+    std::string secret = envSecret ? envSecret : "dev-secret-change-me";
+
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0){
@@ -71,49 +92,59 @@ int main(){
             socklen_t fromLen = sizeof(from);
             
             ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen);
-            if (n < 0){
+            if(n < 0){
                 perror("recvfrom");
                 break;
             }
 
-            if (n != sizeof(InputPacket)){
-                std::printf("Bad Packet\n");
-                continue;
-            }
+            if(n < 1) continue;
 
-            InputPacket in;
-            std::memcpy(&in, buf, sizeof(in));
+            uint8_t type = (uint8_t)buf[0];
 
-            if(in.seq % 30 == 0){
-                std::printf("InputPacket seq=%u dx=%d dy=%d\n", in.seq, in.dx, in.dy);
-            }
-
-            uint64_t key = ((uint64_t)from.sin_addr.s_addr << 16) | from.sin_port;
-            
+            uint64_t key = ((uint64_t)from.sin_addr.s_addr <<16) | from.sin_port;
             char ip[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &from.sin_addr, ip,sizeof(ip));
-            // std::printf("%zd bytes from %s:%d\n", n, ip, ntohs(from.sin_port));
-            // if(sendto(fd, buf,n, 0, (sockaddr*)&from, fromLen) < 0){
-            //     perror("sendto");
-            // }
-            auto now = std::chrono::steady_clock::now();
+            inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip));
+            auto now = Clock::now();
 
-            
-            if(clients.find(key) == clients.end()){
-                std::printf("New client: %s:%d\n", ip, ntohs(from.sin_port));
+            if(type == PKT_JOIN) {
+                if (n != sizeof(JoinPacket)) {
+                    std::printf("bad join size\n");
+                    continue;
+                }
+                JoinPacket jp;
+                std::memcpy(&jp, buf, sizeof(jp));
+                jp.ticket[sizeof(jp.ticket) - 1] = '\0';
+
+                std::string player, sid;
+                if (!verifyTicket(jp.ticket, secret, player, sid)) {
+                    std::printf("rejected join from %s:%d\n", ip, ntohs(from.sin_port));
+                    continue;
+                }
+                if(clients.find(key) == clients.end()){
+                    std::printf("player %s joined session %s from %s:%d\n",
+                                player.c_str(), sid.c_str(), ip, ntohs(from.sin_port));
+                }
+                auto& c = clients[key];
+                if (c.id == 0) c.id = nextId++;
+                c.addr = from;
+                c.lastSeen = now;
+                c.player = player;
+            } else if(type == PKT_INPUT){
+                if(n != sizeof(InputPacket)){
+                    std::printf("bad input size\n");
+                    continue;
+                }
+                auto it = clients.find(key);
+                if(it == clients.end()) continue;
+
+                InputPacket in;
+                std::memcpy(&in, buf, sizeof(in));
+                ClientInfo& c = it->second;
+                c.lastSeen = now;
+                if(in.seq <= c.lastSeq) continue;
+                applyInput(c.x,c.y,in.dx,in.dy);
+                c.lastSeq = in.seq;
             }
-            auto& c = clients[key];
-            if(c.id == 0)
-                c.id = nextId++;
-            c.addr = from;
-            c.lastSeen = now;
-
-            if (in.seq <= c.lastSeq){
-                continue;
-            }
-
-            applyInput(c.x, c.y, in.dx, in.dy);
-            c.lastSeq = in.seq;
         }
 
         auto nowSweep = std::chrono::steady_clock::now();
