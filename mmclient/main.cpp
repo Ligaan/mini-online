@@ -34,10 +34,9 @@ int main(int argc, char** argv){
     std::printf("queue: %d\n", q ? q->status : -1);
 
     std::string msg;
-    if(ws.read(msg)){
-        std::printf("match found: %s\n", msg.c_str());
-    }else{
-        std::printf("connecction close without a match\n");
+    while(ws.read(msg)){
+        std::printf("message: %s\n", msg.c_str());
     }
+    std::printf("connection closed\n");
     return 0;
 }

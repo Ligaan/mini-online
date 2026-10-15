@@ -190,6 +190,16 @@ int main(){
             return;
         }
 
+        bool alreadyMatched;
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            alreadyMatched = playerSession.count(player) > 0;
+        }
+
+        if(!alreadyMatched){
+            ws.send(json{{"status","waiting"}}.dump());
+        }
+
         std::string msg;
         {
             std::unique_lock<std::mutex> lock(mtx);
