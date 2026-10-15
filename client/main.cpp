@@ -49,6 +49,9 @@ int main(int argc, char** argv){
     uint32_t lastAck = 0;
     uint32_t snapsRecv = 0, corrections = 0, dropsOld = 0;
     float maxErr = 0.0f;
+    std::unordered_map<uint32_t, float> prevSmooth;
+    float maxStep = 0.0f;
+    uint32_t stalls = 0, jumps = 0;
 
     while (tickCount < 1500){
         pollfd pfd{};
@@ -164,13 +167,6 @@ int main(int argc, char** argv){
                 perror("sendto");
             }
 
-            if (tickCount % 30 == 0){
-                std::printf("starts: snaps/s=%u pending=%zu corrections=%u maxErr=%.3f stale=%u\n",
-                    snapsRecv,pending.size(), corrections,maxErr,dropsOld);
-                snapsRecv = corrections = dropsOld = 0;
-                maxErr = 0.0f;
-            }
-
             for (auto& remote:remotes){
                 if (remote.second.empty()) continue;
 
@@ -185,9 +181,25 @@ int main(int argc, char** argv){
                     t = std::fmax(0.0, std::fmin(1.0,t));
                     x = a.x + (b.x - a.x) * (float)t;
                 }
+                auto pit = prevSmooth.find(remote.first);
+                if (pit != prevSmooth.end()){
+                    float step = fabsf(x - pit->second);
+                    maxStep = fmaxf(maxStep, step);
+                    if (step < 0.02f) ++stalls;
+                    if (step > 0.30f) ++jumps;
+                }
+                prevSmooth[remote.first] = x;
                 if (tickCount % 30 == 0){
                     std::printf("remote id=%u raw x=%.2f | smooth x=%.2f\n", remote.first, remote.second.back().x,x);
                 }
+            }
+            if (tickCount % 30 == 0){
+                std::printf("stats: snaps/s=%u pending=%zu corrections=%u maxErr=%.3f stale=%u maxStep=%.3f stalls=%u jumps=%u\n",
+                    snapsRecv, pending.size(), corrections, maxErr, dropsOld, maxStep, stalls, jumps);
+                snapsRecv = corrections = dropsOld = 0;
+                maxErr = 0.0f;
+                maxStep = 0.0f;
+                stalls = jumps = 0;
             }
         }
     }
