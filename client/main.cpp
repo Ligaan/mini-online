@@ -47,6 +47,8 @@ int main(int argc, char** argv){
     uint64_t tickCount = 0;
     SnapshotPacket snap{};
     uint32_t lastAck = 0;
+    uint32_t snapsRecv = 0, corrections = 0, dropsOld = 0;
+    float maxErr = 0.0f;
 
     while (tickCount < 1500){
         pollfd pfd{};
@@ -77,6 +79,8 @@ int main(int argc, char** argv){
             if (snap.count > MAX_PLAYERS)
                 continue;
 
+            snapsRecv++;
+
             const EntityState* me = nullptr;
             for (uint32_t i = 0; i < snap.count; ++i){
                 if(snap.entities[i].id == snap.yourId){
@@ -84,7 +88,10 @@ int main(int argc, char** argv){
                     break;
                 }
             }
-            if (snap.lastSeq < lastAck) continue;
+            if (snap.lastSeq < lastAck){
+                dropsOld++;
+                continue;
+            }
             lastAck = snap.lastSeq;
             while(!pending.empty() && pending.front().seq <= snap.lastSeq){
                 pending.pop_front();
@@ -100,6 +107,8 @@ int main(int argc, char** argv){
             }
             float err = oldX - px;
             if (fabsf(err)>0.001f){
+                corrections++;
+                maxErr = fmaxf(maxErr,fabsf(err));
                 std::printf("correction dx=%.3f\n",err);
             }
 
@@ -128,11 +137,11 @@ int main(int argc, char** argv){
                         present = true;
                         break;
                     }
-                    if (!present){
-                        it = remotes.erase(it);
-                    }else{
-                        ++it;
-                    }
+                }
+                if (!present){
+                    it = remotes.erase(it);
+                }else{
+                    ++it;
                 }
             }
 
@@ -153,6 +162,13 @@ int main(int argc, char** argv){
             if (pending.size() > 120) pending.pop_front();
             if(sendto(fd, &pkt, sizeof(pkt), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
                 perror("sendto");
+            }
+
+            if (tickCount % 30 == 0){
+                std::printf("starts: snaps/s=%u pending=%zu corrections=%u maxErr=%.3f stale=%u\n",
+                    snapsRecv,pending.size(), corrections,maxErr,dropsOld);
+                snapsRecv = corrections = dropsOld = 0;
+                maxErr = 0.0f;
             }
 
             for (auto& remote:remotes){
