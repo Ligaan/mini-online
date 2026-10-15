@@ -9,6 +9,7 @@
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <condition_variable>
 
 using json = nlohmann::json;
 
@@ -50,6 +51,7 @@ std::string makeTicket(const std::string& secret, const std::string& player, con
 int main(){
     httplib::Server svr;
     std::mutex mtx;
+    std::condition_variable cv;
     std::vector<std::string> waiting;
     std::map<std::string, Session> sessions;
     std::map<std::string, std::string> playerSession;
@@ -127,6 +129,7 @@ int main(){
         for (const auto& p : s.players){
             playerSession[p] = s.id;
         }
+        cv.notify_all();
         res.set_content(matchJson(s,player).dump(),"application/json");
     });
 
@@ -178,6 +181,35 @@ int main(){
         }
 
         res.set_content(json{{"id",it->second.id},{"players",it->second.players}}.dump(),"application/json");
+    });
+
+    svr.WebSocket("/ws", [&](const httplib::Request& req, httplib::ws::WebSocket& ws){
+        std::string player;
+        if(!verifyToken(req, secret, player)){
+            ws.close(httplib::ws::CloseStatus::PolicyViolation, "unauthorized");
+            return;
+        }
+
+        std::string msg;
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            while(ws.is_open() && std::chrono::steady_clock::now() < deadline){
+                auto ps = playerSession.find(player);
+                if(ps != playerSession.end()){
+                    msg = matchJson(sessions.at(ps->second), player).dump();
+                    break;
+                }
+                cv.wait_for(lock, std::chrono::seconds(1));
+            }
+        }
+
+        if(!msg.empty()){
+            ws.send(msg);
+            ws.close();
+        }else{
+            ws.close(httplib::ws::CloseStatus::GoingAway, "no match");
+        }
     });
 
     svr.listen("0.0.0.0", 8080);
