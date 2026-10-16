@@ -11,10 +11,17 @@
 #include <string>
 #include <cstdlib>
 #include <algorithm>
+#include <thread>
+#include <atomic>
+#include <functional>
+#include <memory>
+#include <csignal>
 
 #include "protocol.h"
 #include "jwt-cpp/jwt.h"
 #include "game.pb.h"
+#include "control.grpc.pb.h"
+#include "grpcpp/grpcpp.h"
 
 struct ClientInfo {
     sockaddr_in addr;
@@ -43,7 +50,56 @@ bool verifyTicket(const std::string& token, const std::string& secret, std::stri
     }
 }
 
+void registryLoop(std::string target, std::string publicAddr,
+                  std::atomic<uint32_t>& players, std::atomic<bool>& running){
+    auto stub = control::Registry::NewStub(grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
+    std::string serverId;
+
+    while(running){
+        grpc::ClientContext ctx;
+        ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
+
+        if(serverId.empty()){
+            control::RegisterRequest req;
+            req.set_address(publicAddr);
+            req.set_capacity(MAX_PLAYERS);
+            control::RegisterReply reply;
+            grpc::Status st = stub->Register(&ctx, req, &reply);
+            if(st.ok()){
+                serverId = reply.server_id();
+                std::printf("registered as %s\n", serverId.c_str());
+            }else{
+                std::printf("register failed: %s\n", st.error_message().c_str());
+            }
+        }else{
+            control::HeartbeatRequest req;
+            req.set_server_id(serverId);
+            req.set_players(players);
+            control::HeartbeatReply reply;
+            grpc::Status st = stub->Heartbeat(&ctx, req, &reply);
+            if(!st.ok()){
+                std::printf("heatbeat failed: %s\n", st.error_message().c_str());
+            }else if(!reply.known()){
+                std::printf("registry forgot us, re-registering\n");
+                serverId.clear();
+            }
+        }
+        for(int i=0; i<20 && running; ++i){
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+}
+
+volatile std::sig_atomic_t stopRequested = 0;
+void onSignal(int){
+    stopRequested = 1;
+}
+
 int main(){
+    std::signal(SIGINT, onSignal);
+    std::signal(SIGTERM, onSignal);
+
     const char* envSecret = std::getenv("MM_SECRET");
     std::string secret = envSecret ? envSecret : "dev-secret-change-me";
 
@@ -67,6 +123,15 @@ int main(){
     
     std::printf("bound to UDP port 9000\n");
     
+    const char* envGrpc = std::getenv("MM_GRPC_ADDR");
+    std::string grpcTarget = envGrpc ? envGrpc : "localhost:50051";
+    const char* envPub = std::getenv("GAME_PUBLIC_ADDR");
+    std::string publicAddr = envPub ? envPub : "127.0.0.1:9000";
+
+    std::atomic<uint32_t> playerCount{0};
+    std::atomic<bool> running{true};
+    std::thread registry(registryLoop, grpcTarget, publicAddr, std::ref(playerCount), std::ref(running));
+
     char buf[1500];
 
     std::unordered_map<uint64_t, ClientInfo> clients;
@@ -75,7 +140,7 @@ int main(){
     uint64_t tickCount = 0;
     uint32_t nextId = 1;
 
-    while(true){
+    while(!stopRequested){
         pollfd pfd{};
         pfd.fd = fd;
         pfd.events = POLLIN;
@@ -157,6 +222,8 @@ int main(){
         if(Clock::now() >= nextTick){
             nextTick += TICK;
             ++tickCount;
+            playerCount =static_cast<uint32_t>(clients.size());
+
             if(tickCount % 30 == 0){
                 std::printf("tick %llu\n",(unsigned long long)tickCount);
             }
@@ -183,7 +250,9 @@ int main(){
             }
         }
     }
-
+    running = false;
+    registry.join();
+    
     close(fd);
     return 0;
 }
