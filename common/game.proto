@@ -1,0 +1,12 @@
+syntax = "proto3";
+package game;
+
+message Input {
+    uint32 seq = 1;
+    sint32 dx = 2;
+    sint32 dy = 3;
+}
+
+message Join {
+    string ticket = 1;
+}

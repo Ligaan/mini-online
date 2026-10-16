@@ -10,3 +10,6 @@ add_subdirectory(server)
 add_subdirectory(client)
 add_subdirectory(matchmaker)
 add_subdirectory(mmclient)
+add_subdirectory(common)
+add_subdirectory(protodemo)
+
