@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 cd "$(dirname "$0")"
 
-MM=http://localhost:8080
+
+HOST=${1:-localhost}
+MM=http://$HOST:8080
 pass=0
 fail=0
 

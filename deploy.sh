@@ -5,6 +5,5 @@ HOST=pi
 DIR=mini-online
 
 rsync -az --delete --exclude build --exclude .git ./ "${HOST}:${DIR}/"
-ssh "$HOST" "cd $DIR && cmake -S . -B build && cmake --build build"
-ssh "$HOST" "sudo systemctl try-restart mini-online"
+ssh "$HOST" "cd $DIR && docker compose up --build -d"
 echo "Deployed"

@@ -1,0 +1,29 @@
+services:
+  matchmaker:
+    build:
+      context: .
+      dockerfile: matchmaker/Dockerfile
+    image: mini-online-matchmaker
+    init: true
+    environment:
+      MM_SECRET: ${MM_SECRET:-dev-secret-change-me}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  gameserver:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: mini-online-server
+    init: true
+    depends_on:
+      - matchmaker
+    environment:
+      MM_SECRET: ${MM_SECRET:-dev-secret-change-me}
+      MM_GRPC_ADDR: matchmaker:50051
+      GAME_CONTROL_ADDR: gameserver:50052
+      GAME_PUBLIC_ADDR: ${PI_ADDR:-192.168.137.129}:9000
+    ports:
+      - "9000:9000/udp"
+    restart: unless-stopped
