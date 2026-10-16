@@ -114,6 +114,7 @@ bool allocateOnServer(const std::string& ctlAddr, const std::string& sid, const 
 }
 
 int main(){
+    std::setvbuf(stdout,nullptr, _IOLBF, 0);
     httplib::Server svr;
     std::mutex mtx;
     std::condition_variable cv;
