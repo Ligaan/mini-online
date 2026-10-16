@@ -9,7 +9,7 @@ using socket_t = SOCKET;
 inline int net_init()
 {
     WSADATA d;
-    return WSAStratup(MAKEWORD(2,2), &d);
+    return WSAStartup(MAKEWORD(2,2), &d);
 }
 
 inline void net_cleanup()
@@ -45,7 +45,7 @@ inline void net_disable_connreset(socket_t s)
 {
     BOOL off = FALSE;
     DWORD n = 0;
-    WSAIoctl(s, SIO_UDP_CONNRESET, &off, sizeoff(off), nullprt, 0, &n, nullptr, nullptr);
+    WSAIoctl(s, SIO_UDP_CONNRESET, &off, sizeof(off), nullptr, 0, &n, nullptr, nullptr);
 }
 #else
 #include <sys/socket.h>
