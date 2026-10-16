@@ -2,3 +2,5 @@ build
 .git
 .vscode
 *.log
+build-win
+vcpkg_installed

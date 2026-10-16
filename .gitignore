@@ -1,2 +1,4 @@
 build/
 build.log
+build-win/
+vcpkg_installed/

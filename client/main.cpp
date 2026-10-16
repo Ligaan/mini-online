@@ -1,10 +1,6 @@
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include "net_platform.h"
 #include <cstdio>
 #include <cstring>
-#include <poll.h>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -37,12 +33,25 @@ int main(int argc, char** argv){
     InputPacket pkt{};
     pkt.type = PKT_INPUT;
 
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0){
-        perror("socket");
+        if(net_init() != 0){
+        std::printf("network init failed\n");
         return 1;
     }
-    std::printf("Socket created, fd=%d\n",fd);
+    socket_t fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if(net_invalid(fd)){
+        net_perror("socket");
+        return 1;
+    }
+    net_disable_connreset(fd);
+
+    sockaddr_in local{};
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    local.sin_port = 0;
+    if(bind(fd, (sockaddr*)&local, sizeof(local)) < 0){
+        net_perror("bind");
+        return 1;
+    }
     
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -72,18 +81,18 @@ int main(int argc, char** argv){
         pfd.events = POLLIN;
         auto untilTick = std::chrono::duration_cast<std::chrono::milliseconds>(nextTick - Clock::now()).count();
         int timeoutMs = untilTick > 0 ? (int) untilTick : 0;
-        int ready = poll(&pfd, 1, timeoutMs);
+        int ready = net_poll(&pfd, 1, timeoutMs);
 
         if(ready < 0){
-            perror("poll");
+            net_perror("poll");
             break;
         }
 
         if(ready > 0){
             char reply[1500];
-            ssize_t n = recvfrom(fd, reply, sizeof(reply), 0, nullptr, nullptr);
+            auto n = recvfrom(fd, reply, (int)sizeof(reply), 0, nullptr, nullptr);
             if (n < 0){
-                perror("recvfrom");
+                net_perror("recvfrom");
                 continue;
             }
             if(!snap.ParseFromArray(reply, (int)n)){
@@ -130,6 +139,7 @@ int main(int argc, char** argv){
             lastSnapTick = snap.tick();
             lastRecvTime = Clock::now();
 
+
             for (const auto& e:snap.entities()){
                 uint32_t id = e.id();
                 if(id != snap.your_id()){
@@ -166,8 +176,8 @@ int main(int argc, char** argv){
             ++tickCount;
 
             if(!joined){
-                if(sendto(fd,joinBytes.data(),joinBytes.size(),0,(sockaddr*)&addr, sizeof(addr))<0)
-                    perror("sendto");
+                if(sendto(fd,joinBytes.data(),(int)joinBytes.size(),0,(sockaddr*)&addr, (int)sizeof(addr))<0)
+                    net_perror("sendto");
             }else{
 
                 pkt.seq = tickCount;
@@ -184,8 +194,8 @@ int main(int argc, char** argv){
                 in->set_dx(pkt.dx);
                 in->set_dy(pkt.dy);
                 std::string bytes = msg.SerializeAsString();
-                if(sendto(fd, bytes.data(),bytes.size(), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
-                    perror("senddto");
+                if(sendto(fd, bytes.data(),(int)bytes.size(), 0, (sockaddr*)&addr, (int)sizeof(addr)) < 0){
+                    net_perror("senddto");
                 }
             }
             double elapsed = std::chrono::duration<double>(Clock::now()-lastRecvTime).count();
@@ -229,6 +239,7 @@ int main(int argc, char** argv){
         }
     }
 
-    close(fd);
+    net_close(fd);
+    net_cleanup();
     return 0;
 }
