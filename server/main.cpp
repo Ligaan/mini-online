@@ -161,29 +161,24 @@ int main(){
                 std::printf("tick %llu\n",(unsigned long long)tickCount);
             }
             
-            SnapshotPacket snap{};
-            snap.tick = (uint32_t)tickCount;
-            for(const auto& entry: clients){
+            game::Snapshot snap;
+            snap.set_tick((uint32_t)tickCount);
+            for(const auto& entry:clients){
                 const ClientInfo& c = entry.second;
-                EntityState& e = snap.entities[snap.count++];
-                e.id = c.id;
-                e.x = c.x;
-                e.y = c.y;
-    
-                if(snap.count == MAX_PLAYERS)
-                    break;
+                if(snap.entities_size()>=(int)MAX_PLAYERS) break;
+                game::Entity* e = snap.add_entities();
+                e->set_id(c.id);
+                e->set_x(c.x);
+                e->set_y(c.y);
             }
-    
-            
 
-            for(const auto& entry: clients){
+            for(const auto& entry:clients){
                 const ClientInfo& c = entry.second;
-                SnapshotPacket out = snap;
-                out.lastSeq = c.lastSeq;
-                out.yourId = c.id;
-    
-                if(sendto(fd, &out,sizeof(out), 0, (sockaddr*)&c.addr, sizeof(c.addr)) < 0){
-                        perror("sendto");
+                snap.set_last_seq(c.lastSeq);
+                snap.set_your_id(c.id);
+                std::string bytes = snap.SerializeAsString();
+                if(sendto(fd, bytes.data(), bytes.size(), 0, (sockaddr*)&c.addr, sizeof(c.addr)) < 0){
+                    perror("sendto");
                 }
             }
         }

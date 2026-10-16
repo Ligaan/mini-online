@@ -58,14 +58,14 @@ int main(int argc, char** argv){
 
     auto nextTick = Clock::now() + TICK;
     uint64_t tickCount = 0;
-    SnapshotPacket snap{};
     uint32_t lastAck = 0;
     uint32_t snapsRecv = 0, corrections = 0, dropsOld = 0;
     float maxErr = 0.0f;
     std::unordered_map<uint32_t, float> prevSmooth;
     float maxStep = 0.0f;
     uint32_t stalls = 0, jumps = 0;
-
+    game::Snapshot snap;
+    
     while (tickCount < 1500){
         pollfd pfd{};
         pfd.fd = fd;
@@ -84,41 +84,39 @@ int main(int argc, char** argv){
             ssize_t n = recvfrom(fd, reply, sizeof(reply), 0, nullptr, nullptr);
             if (n < 0){
                 perror("recvfrom");
+                continue;
             }
-            if(n != sizeof(SnapshotPacket)){
+            if(!snap.ParseFromArray(reply, (int)n)){
                 std::printf("Bad Packet\n");
                 continue;
             }
-            
-            memcpy(&snap, reply, sizeof(snap));
-
-            if (snap.count > MAX_PLAYERS)
-                continue;
+            if(snap.entities_size() > (int)MAX_PLAYERS) continue;
 
             joined = true;
             snapsRecv++;
 
-            const EntityState* me = nullptr;
-            for (uint32_t i = 0; i < snap.count; ++i){
-                if(snap.entities[i].id == snap.yourId){
-                    me = &snap.entities[i];
+            const game::Entity* me = nullptr;
+            for(const auto& e:snap.entities()){
+                if(e.id() == snap.your_id()){
+                    me = &e;
                     break;
                 }
             }
-            if (snap.lastSeq < lastAck){
+            
+            if (snap.last_seq() < lastAck){
                 dropsOld++;
                 continue;
             }
-            lastAck = snap.lastSeq;
-            while(!pending.empty() && pending.front().seq <= snap.lastSeq){
+            lastAck = snap.last_seq();
+            while(!pending.empty() && pending.front().seq <= snap.last_seq()){
                 pending.pop_front();
             }
             float oldX = px;
 
             if (!me) continue;
 
-            px = me->x;
-            py = me->y;
+            px = me->x();
+            py = me->y();
             for (const auto& p: pending){
                 applyInput(px, py, p.dx, p.dy);
             }
@@ -129,17 +127,17 @@ int main(int argc, char** argv){
                 std::printf("correction dx=%.3f\n",err);
             }
 
-            lastSnapTick = snap.tick;
+            lastSnapTick = snap.tick();
             lastRecvTime = Clock::now();
 
-            for (uint32_t i = 0; i < snap.count; ++i){
-                uint32_t& id = snap.entities[i].id;
-                if(id != snap.yourId){
+            for (const auto& e:snap.entities()){
+                uint32_t id = e.id();
+                if(id != snap.your_id()){
                     Sample sp{};
-                    sp.tick = snap.tick;
-                    sp.x = snap.entities[i].x;
-                    sp.y = snap.entities[i].y;
-                    if (!remotes[id].empty() && snap.tick <= remotes[id].back().tick)
+                    sp.tick = snap.tick();
+                    sp.x = e.x();
+                    sp.y = e.y();
+                    if (!remotes[id].empty() && snap.tick() <= remotes[id].back().tick)
                         continue;
                     remotes[id].push_back(sp);
                     if (remotes[id].size()>32)
@@ -149,8 +147,8 @@ int main(int argc, char** argv){
 
             for (auto it = remotes.begin(); it != remotes.end();){
                 bool present = false;
-                for (uint32_t i = 0; i < snap.count; ++i){
-                    if (snap.entities[i].id == it->first){
+                for (const auto& e:snap.entities()){
+                    if (e.id() == it->first){
                         present = true;
                         break;
                     }
