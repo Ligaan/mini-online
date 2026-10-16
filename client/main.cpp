@@ -10,8 +10,10 @@
 #include <deque>
 #include <cmath>
 #include <unordered_map>
+#include <string>
 
 #include "protocol.h"
+#include "game.pb.h"
 
 using Clock = std::chrono::steady_clock;
 constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz
@@ -28,9 +30,9 @@ int main(int argc, char** argv){
         std::printf("usage: client <server-ip> <ticket>\n");
         return 1;
     }
-    JoinPacket jp{};
-    jp.type = PKT_JOIN;
-    std::strncpy(jp.ticket, argv[2], sizeof(jp.ticket) - 1);
+    game::ClientMessage joinMsg;
+    joinMsg.mutable_join()->set_ticket(argv[2]);
+    std::string joinBytes = joinMsg.SerializeAsString();
     bool joined = false;
     InputPacket pkt{};
     pkt.type = PKT_INPUT;
@@ -166,7 +168,7 @@ int main(int argc, char** argv){
             ++tickCount;
 
             if(!joined){
-                if(sendto(fd,&jp,sizeof(jp),0,(sockaddr*)&addr, sizeof(addr))<0)
+                if(sendto(fd,joinBytes.data(),joinBytes.size(),0,(sockaddr*)&addr, sizeof(addr))<0)
                     perror("sendto");
             }else{
 
@@ -177,8 +179,15 @@ int main(int argc, char** argv){
                 applyInput(px, py, pkt.dx, pkt.dy);
                 pending.push_back(pkt);
                 if (pending.size() > 120) pending.pop_front();
-                if(sendto(fd, &pkt, sizeof(pkt), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
-                    perror("sendto");
+
+                game::ClientMessage msg;
+                game::Input* in = msg.mutable_input();
+                in->set_seq(pkt.seq);
+                in->set_dx(pkt.dx);
+                in->set_dy(pkt.dy);
+                std::string bytes = msg.SerializeAsString();
+                if(sendto(fd, bytes.data(),bytes.size(), 0, (sockaddr*)&addr, sizeof(addr)) < 0){
+                    perror("senddto");
                 }
             }
             double elapsed = std::chrono::duration<double>(Clock::now()-lastRecvTime).count();

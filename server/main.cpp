@@ -10,9 +10,11 @@
 #include <cstring>
 #include <string>
 #include <cstdlib>
+#include <algorithm>
 
 #include "protocol.h"
 #include "jwt-cpp/jwt.h"
+#include "game.pb.h"
 
 struct ClientInfo {
     sockaddr_in addr;
@@ -97,53 +99,46 @@ int main(){
                 break;
             }
 
-            if(n < 1) continue;
-
-            uint8_t type = (uint8_t)buf[0];
+            game::ClientMessage msg;
+            if(!msg.ParseFromArray(buf, (int)n)){
+                std::printf("bad packet\n");
+                continue;
+            }
 
             uint64_t key = ((uint64_t)from.sin_addr.s_addr <<16) | from.sin_port;
             char ip[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip));
             auto now = Clock::now();
 
-            if(type == PKT_JOIN) {
-                if (n != sizeof(JoinPacket)) {
-                    std::printf("bad join size\n");
-                    continue;
-                }
-                JoinPacket jp;
-                std::memcpy(&jp, buf, sizeof(jp));
-                jp.ticket[sizeof(jp.ticket) - 1] = '\0';
-
+            if(msg.has_join()){
                 std::string player, sid;
-                if (!verifyTicket(jp.ticket, secret, player, sid)) {
+                if(!verifyTicket(msg.join().ticket(), secret, player, sid)){
                     std::printf("rejected join from %s:%d\n", ip, ntohs(from.sin_port));
                     continue;
                 }
                 if(clients.find(key) == clients.end()){
-                    std::printf("player %s joined session %s from %s:%d\n",
-                                player.c_str(), sid.c_str(), ip, ntohs(from.sin_port));
+                    std::printf("player %s joined session %s from %s:%d\n", 
+                    player.c_str(), sid.c_str(), ip, ntohs(from.sin_port));
                 }
                 auto& c = clients[key];
-                if (c.id == 0) c.id = nextId++;
+                if(c.id == 0) c.id = nextId++;
                 c.addr = from;
                 c.lastSeen = now;
                 c.player = player;
-            } else if(type == PKT_INPUT){
-                if(n != sizeof(InputPacket)){
-                    std::printf("bad input size\n");
-                    continue;
-                }
+            }
+            else if(msg.has_input()){
                 auto it = clients.find(key);
                 if(it == clients.end()) continue;
 
-                InputPacket in;
-                std::memcpy(&in, buf, sizeof(in));
+                const game::Input& in = msg.input();
                 ClientInfo& c = it->second;
                 c.lastSeen = now;
-                if(in.seq <= c.lastSeq) continue;
-                applyInput(c.x,c.y,in.dx,in.dy);
-                c.lastSeq = in.seq;
+                if(in.seq() <= c.lastSeq) continue;
+
+                int dx = std::clamp(in.dx(), -1, 1);
+                int dy = std::clamp(in.dy(), -1, 1);
+                applyInput(c.x,c.y,(int8_t)dx,(int8_t)dy);
+                c.lastSeq = in.seq();
             }
         }
 

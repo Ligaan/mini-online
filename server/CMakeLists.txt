@@ -3,4 +3,4 @@ target_include_directories(server PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party
     ${CMAKE_SOURCE_DIR}/third_party/jwt)
 find_package(OpenSSL REQUIRED)
-target_link_libraries(server PRIVATE OpenSSL::Crypto)
+target_link_libraries(server PRIVATE OpenSSL::Crypto gamenet)

@@ -10,3 +10,10 @@ message Input {
 message Join {
     string ticket = 1;
 }
+
+message ClientMessage {
+    oneof body {
+        Join join = 1;
+        Input input = 2;
+    }
+}
