@@ -16,6 +16,9 @@
 #include <functional>
 #include <memory>
 #include <csignal>
+#include <mutex>
+#include <map>
+#include <set>
 
 #include "protocol.h"
 #include "jwt-cpp/jwt.h"
@@ -50,7 +53,29 @@ bool verifyTicket(const std::string& token, const std::string& secret, std::stri
     }
 }
 
-void registryLoop(std::string target, std::string publicAddr,
+struct AllowedSessions{
+    std::mutex mtx;
+    std::map<std::string,std::set<std::string>> sessions;
+};
+
+class GameControlImpl final : public control::GameControl::Service {
+    public:
+        explicit GameControlImpl(AllowedSessions& a) : allowed_(a) {}
+
+        grpc::Status AllocateMatch(grpc::ServerContext*, const control::AllocateRequest* req, control::AllocateReply* reply) override {
+            std::lock_guard<std::mutex> lock(allowed_.mtx);
+            std::set<std::string> players(req->players().begin(), req->players().end());
+            allowed_.sessions[req->session_id()] = players;
+            reply->set_accepted(true);
+            std::printf("allocated session %s (%zu players)\n", req->session_id().c_str(),players.size());
+            return grpc::Status::OK;
+        }
+
+    private:
+        AllowedSessions& allowed_;
+};
+
+void registryLoop(std::string target, std::string publicAddr, std::string controlAddr,
                   std::atomic<uint32_t>& players, std::atomic<bool>& running){
     auto stub = control::Registry::NewStub(grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
     std::string serverId;
@@ -63,6 +88,7 @@ void registryLoop(std::string target, std::string publicAddr,
             control::RegisterRequest req;
             req.set_address(publicAddr);
             req.set_capacity(MAX_PLAYERS);
+            req.set_control_address(controlAddr);
             control::RegisterReply reply;
             grpc::Status st = stub->Register(&ctx, req, &reply);
             if(st.ok()){
@@ -128,9 +154,24 @@ int main(){
     const char* envPub = std::getenv("GAME_PUBLIC_ADDR");
     std::string publicAddr = envPub ? envPub : "127.0.0.1:9000";
 
+    const char* envCtl = std::getenv("GAME_CONTROL_ADDR");
+    std::string controlAddr = envCtl ? envCtl : "127.0.0.1:50052";
+
+    AllowedSessions allowed;
+    GameControlImpl gameControl(allowed);
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort("0.0.0.0:50052", grpc::InsecureServerCredentials());
+    builder.RegisterService(&gameControl);
+    std::unique_ptr<grpc::Server> grpcServer = builder.BuildAndStart();
+    if(!grpcServer){
+        std::printf("could not start control server on 50052\n");
+        return 1;
+    }
+    std::printf("control gRPC on 50052\n");
+
     std::atomic<uint32_t> playerCount{0};
     std::atomic<bool> running{true};
-    std::thread registry(registryLoop, grpcTarget, publicAddr, std::ref(playerCount), std::ref(running));
+    std::thread registry(registryLoop, grpcTarget, publicAddr, controlAddr, std::ref(playerCount), std::ref(running));
 
     char buf[1500];
 
@@ -180,6 +221,14 @@ int main(){
                 if(!verifyTicket(msg.join().ticket(), secret, player, sid)){
                     std::printf("rejected join from %s:%d\n", ip, ntohs(from.sin_port));
                     continue;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(allowed.mtx);
+                    auto s = allowed.sessions.find(sid);
+                    if(s == allowed.sessions.end() || !s->second.count(player)){
+                        std::printf("rejected join: %s is not allocated to session %s\n",player.c_str(), sid.c_str());
+                        continue;
+                    }
                 }
                 if(clients.find(key) == clients.end()){
                     std::printf("player %s joined session %s from %s:%d\n", 
@@ -252,6 +301,7 @@ int main(){
     }
     running = false;
     registry.join();
+    grpcServer->Shutdown();
     
     close(fd);
     return 0;

@@ -4,6 +4,7 @@ package control;
 message RegisterRequest {
     string address = 1;
     uint32 capacity = 2;
+    string control_address = 3;
 }
 message RegisterReply {
     string server_id = 1;
@@ -14,6 +15,19 @@ message HeartbeatRequest {
 }
 message HeartbeatReply {
     bool known = 1;
+}
+
+message AllocateRequest {
+    string session_id = 1;
+    repeated string players = 2;
+}
+
+message AllocateReply {
+    bool accepted = 1;
+}
+
+service GameControl {
+    rpc AllocateMatch(AllocateRequest) returns (AllocateReply);
 }
 
 service Registry {

@@ -27,6 +27,7 @@ struct GameServer {
     uint32_t capacity = 0;
     uint32_t players = 0;
     std::chrono::steady_clock::time_point lastBeat;
+    std::string controlAddress;
 };
 
 class RegistryImpl final : public control::Registry::Service {
@@ -39,6 +40,7 @@ class RegistryImpl final : public control::Registry::Service {
             GameServer gs;
             gs.address = req->address();
             gs.capacity = req->capacity();
+            gs.controlAddress = req->control_address();
             gs.lastBeat = std::chrono::steady_clock::now();
             servers_[id]= gs;
             reply->set_server_id(id);
@@ -95,6 +97,22 @@ std::string makeTicket(const std::string& secret, const std::string& player, con
         .sign(jwt::algorithm::hs256{secret});    
 }
 
+bool allocateOnServer(const std::string& ctlAddr, const std::string& sid, const std::vector<std::string>& players){
+    auto stub = control::GameControl::NewStub(grpc::CreateChannel(ctlAddr, grpc::InsecureChannelCredentials()));
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
+
+    control::AllocateRequest req;
+    req.set_session_id(sid);
+    for(const auto& p : players){
+     req.add_players(p);
+    }
+
+    control::AllocateReply reply;
+    grpc::Status st = stub->AllocateMatch(&ctx, req, &reply);
+    return st.ok() && reply.accepted();
+}
+
 int main(){
     httplib::Server svr;
     std::mutex mtx;
@@ -108,7 +126,7 @@ int main(){
     std::map<std::string, GameServer> servers;
     RegistryImpl registry(serversMtx, servers);
 
-    auto pickServer = [&](std::string& addrOut) -> bool {
+    auto pickServer = [&](std::string& addrOut, std::string& ctlOut) -> bool {
         std::lock_guard<std::mutex> lock(serversMtx);
         auto now = std::chrono::steady_clock::now();
         const GameServer* best = nullptr;
@@ -120,6 +138,7 @@ int main(){
         }
         if(!best) return false;
         addrOut = best->address;
+        ctlOut = best->controlAddress;
         return true;
     };
 
@@ -152,7 +171,7 @@ int main(){
             arr.push_back({
                     {"id", kv.first},{"address",kv.second.address},
                     {"capacity", kv.second.capacity}, {"players",kv.second.players},
-                    {"last_beat_s_ago", age}, {"alive", age <= 6}
+                    {"last_beat_s_ago", age}, {"alive", age <= 6}, {"address", kv.second.controlAddress}
                 });
         }
         res.set_content(arr.dump(), "application/json");
@@ -206,11 +225,19 @@ int main(){
             return;
         }
 
-        std::string serverAddr;
-        if(!pickServer(serverAddr)){
+        std::string serverAddr,ctlAddr;
+        if(!pickServer(serverAddr, ctlAddr)){
             waiting.pop_back();
             res.status = 503;
-            res.set_content(json{{"error","no game server available"}}.dump(), "application/json");
+            res.set_content(json{{"error","no game server available"}}.dump(),"application/json");
+            return;
+        }
+
+        std::string sid = std::to_string(nextSession);
+        if(!allocateOnServer(ctlAddr, sid, {waiting[0], waiting[1]})){
+            waiting.pop_back();
+            res.status = 503;
+            res.set_content(json{{"error","game server did not accept the session"}}.dump(), "application/json");
             return;
         }
 
