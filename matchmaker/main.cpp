@@ -13,6 +13,7 @@
 #include "control.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #include <memory>
+#include "hiredis/hiredis.h"
 
 using json = nlohmann::json;
 
@@ -20,6 +21,84 @@ struct Session{
     std::string id;
     std::vector<std::string> players;
     std::string serverAddr;
+};
+
+using Reply = std::unique_ptr<redisReply, decltype(&freeReplyObject)>;
+
+class Store {
+    public:
+        ~Store(){
+            if(ctx_)
+            redisFree(ctx_);
+        }
+
+        bool connect(const std::string& host, int port){
+            ctx_ = redisConnect(host.c_str(), port);
+            if(!ctx_ || ctx_->err){
+                std::printf("redis connect failed: %s\n",ctx_ ? ctx_->errstr : "out of memory");
+                return false;
+            }
+            return true;
+        }
+
+        long nextSessionId(){
+            std::lock_guard<std::mutex> lock(m_);
+            if(!ensure()) return -1;
+            Reply r(static_cast<redisReply*>(redisCommand(ctx_, "INCR mm:next_session")), freeReplyObject);
+            return (r && r->type == REDIS_REPLY_INTEGER) ? (long)r->integer : -1;
+        }
+
+        bool saveSession(const Session& s){
+            std::lock_guard<std::mutex> lock(m_);
+            if(!ensure()) return false;
+            std::string body = json{{"id",s.id}, {"players", s.players}, {"server", s.serverAddr}}.dump();
+            Reply r(static_cast<redisReply*>(redisCommand(ctx_, "SET mm:session:%s %s EX %d", s.id.c_str(), body.c_str(), kTtl)), freeReplyObject);
+            if(!ok(r)) return false;
+            for(const auto& p : s.players){
+                Reply r2(static_cast<redisReply*>(redisCommand(ctx_, "SET mm:player:%s %s EX %d", p.c_str(), s.id.c_str(), kTtl)), freeReplyObject);
+                if(!ok(r2)) return false;
+            }
+            return true;
+        }
+
+        bool loadSession(const std::string& id, Session& out){
+            std::string body;
+            if(!getString("mm:session:" + id, body)) return false;
+            json j = json::parse(body, nullptr, false);
+            if(j.is_discarded()) return false;
+            out.id = j.value("id", "");
+            out.players = j.value("players", std::vector<std::string>{});
+            out.serverAddr = j.value("server", "");
+            return true;
+        }
+
+        bool sessionOf(const std::string& player, std::string& idOut){
+            return getString("mm:player:" + player, idOut);
+        }
+    private:
+        static constexpr int kTtl = 3600;
+
+        bool ensure(){
+            if(!ctx_) return false;
+            if(ctx_->err) return redisReconnect(ctx_) == REDIS_OK;
+            return true;
+        }
+
+        static bool ok(const Reply& r){
+             return r && r->type != REDIS_REPLY_ERROR;
+        }
+
+        bool getString(const std::string& key, std::string& out){
+            std::lock_guard<std::mutex> lock(m_);
+            if(!ensure()) return false;
+            Reply r(static_cast<redisReply*>(redisCommand(ctx_, "GET %s", key.c_str())), freeReplyObject);
+            if(!r || r->type != REDIS_REPLY_STRING) return false;
+            out.assign(r->str, r->len);
+            return true;
+        }
+
+        redisContext* ctx_ = nullptr;
+        std::mutex m_;
 };
 
 struct GameServer {
@@ -119,9 +198,9 @@ int main(){
     std::mutex mtx;
     std::condition_variable cv;
     std::vector<std::string> waiting;
-    std::map<std::string, Session> sessions;
-    std::map<std::string, std::string> playerSession;
-    int nextSession = 1;
+    Store store;
+    const char* envRedis = std::getenv("REDIS_HOST");
+    if(!store.connect(envRedis ? envRedis : "127.0.0.1", 6379)) return 1;
 
     std::mutex serversMtx;
     std::map<std::string, GameServer> servers;
@@ -208,8 +287,8 @@ int main(){
         }
 
         std::lock_guard<std::mutex> lock(mtx);
-
-        if(playerSession.count(player)){
+        std::string existing;
+        if(store.sessionOf(player,existing)){
             res.status = 409;
             res.set_content(json{{"error","already in a session"}}.dump(),"application/json");
             return;
@@ -234,25 +313,35 @@ int main(){
             return;
         }
 
-        std::string sid = std::to_string(nextSession);
+        long n = store.nextSessionId();
+        if(n<0){
+            waiting.pop_back();
+            res.status = 503;
+            res.set_content(json{{"error","state store unavailable"}}.dump(),"application/json");
+            return;
+        }
+
+        std::string sid = std::to_string(n);
         if(!allocateOnServer(ctlAddr, sid, {waiting[0], waiting[1]})){
             waiting.pop_back();
             res.status = 503;
-            res.set_content(json{{"error","game server did not accept the session"}}.dump(), "application/json");
+            res.set_content(json{{"error", "game server did not accept the session"}}.dump(), "application/json");
             return;
         }
 
         Session s;
-        s.id = std::to_string(nextSession++);
-        s.serverAddr= serverAddr;
+        s.id = sid;
+        s.serverAddr = serverAddr;
         s.players = {waiting[0], waiting[1]};
-        waiting.erase(waiting.begin(), waiting.begin() + 2);
-        sessions[s.id] = s;
-        for (const auto& p : s.players){
-            playerSession[p] = s.id;
+        if(!store.saveSession(s)){
+            waiting.pop_back();
+            res.status = 503;
+            res.set_content(json{{"error", "state store unavailable"}}.dump(), "application/json");
+            return;
         }
+        waiting.erase(waiting.begin(), waiting.begin()+2);
         cv.notify_all();
-        res.set_content(matchJson(s,player).dump(),"application/json");
+        res.set_content(matchJson(s, player).dump(), "application/json");
     });
 
     svr.Get("/match", [&](const httplib::Request& req, httplib::Response& res){
@@ -265,10 +354,13 @@ int main(){
 
         std::lock_guard<std::mutex> lock(mtx);
 
-        auto ps = playerSession.find(player);
-        if(ps != playerSession.end()){
-            res.set_content(matchJson(sessions.at(ps->second), player).dump(), "application/json");
-            return;
+        std::string sid;
+        if(store.sessionOf(player, sid)){
+            Session s;
+            if(store.loadSession(sid,s)){
+                res.set_content(matchJson(s, player).dump(), "application/json");
+                return;
+            }
         }
         if(std::find(waiting.begin(),waiting.end(), player) != waiting.end()){
             res.set_content(json{{"status","waiting"}}.dump(), "application/json");
@@ -289,20 +381,20 @@ int main(){
 
         std::lock_guard<std::mutex> lock(mtx);
 
-        auto it = sessions.find(id);
-        if (it == sessions.end()){
+        Session s;
+        if (!store.loadSession(id,s)){
             res.status = 404;
             res.set_content(json{{"error", "no such session"}}.dump(),"application/json");
             return;
         }
         
-        if(   std::find(it->second.players.begin(), it->second.players.end(), player) == it->second.players.end()){
+        if(   std::find(s.players.begin(), s.players.end(), player) == s.players.end()){
             res.status = 403;
             res.set_content(json{{"error","not your session"}}.dump(), "application/json");
             return;
         }
 
-        res.set_content(json{{"id",it->second.id},{"players",it->second.players},{"server", it->second.serverAddr}}.dump(),"application/json");
+        res.set_content(json{{"id",s.id},{"players",s.players},{"server", s.serverAddr}}.dump(),"application/json");
     });
 
     svr.WebSocket("/ws", [&](const httplib::Request& req, httplib::ws::WebSocket& ws){
@@ -312,10 +404,11 @@ int main(){
             return;
         }
 
+        std::string tmp;
         bool alreadyMatched;
         {
             std::lock_guard<std::mutex> lock(mtx);
-            alreadyMatched = playerSession.count(player) > 0;
+            alreadyMatched = store.sessionOf(player,tmp);
         }
 
         if(!alreadyMatched){
@@ -327,10 +420,13 @@ int main(){
             std::unique_lock<std::mutex> lock(mtx);
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             while(ws.is_open() && std::chrono::steady_clock::now() < deadline){
-                auto ps = playerSession.find(player);
-                if(ps != playerSession.end()){
-                    msg = matchJson(sessions.at(ps->second), player).dump();
-                    break;
+                std::string sid;
+                if(store.sessionOf(player, sid)){
+                    Session s;
+                    if(store.loadSession(sid,s)){
+                        msg = matchJson(s, player).dump();
+                        break;
+                    }
                 }
                 cv.wait_for(lock, std::chrono::seconds(1));
             }

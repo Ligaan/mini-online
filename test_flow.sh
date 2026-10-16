@@ -3,6 +3,8 @@ cd "$(dirname "$0")"
 
 
 HOST=${1:-localhost}
+S=$RANDOM
+
 MM=http://$HOST:8080
 pass=0
 fail=0
@@ -23,9 +25,9 @@ login() {
     curl -s -X POST $MM/login -d "{\"name\":\"$1\"}" | jq -r .token
 }
 
-A=$(login alice)
-B=$(login bob)
-C=$(login carol)
+A=$(login alice$S)
+B=$(login bob$S)
+C=$(login carol$S)
 
 check "queue without token" 401 "$(code -X POST $MM/queue)"
 check "alice queue"         202 "$(code -X POST $MM/queue -H "Authorization: Bearer $A")"
@@ -43,9 +45,9 @@ check "alice reads her session"     200 "$(code $MM/session/$SID -H "Authorizati
 check "ticket rejected as bearer"   401 "$(code -X POST $MM/queue -H "Authorization: Bearer $TB")"
 
 
-timeout 6 stdbuf -oL ./build/client/client 127.0.0.1 "$TA" > /tmp/alice.log 2>&1 &
-timeout 6 stdbuf -oL ./build/client/client 127.0.0.1 "$TB" > /tmp/bob.log 2>&1 &
-timeout 6 stdbuf -oL ./build/client/client 127.0.0.1 "${TA}x" > /tmp/forged.log 2>&1 &
+timeout 6 stdbuf -oL ./build/client/client $HOST "$TA" > /tmp/alice.log 2>&1 &
+timeout 6 stdbuf -oL ./build/client/client $HOST "$TB" > /tmp/bob.log 2>&1 &
+timeout 6 stdbuf -oL ./build/client/client $HOST "${TA}x" > /tmp/forged.log 2>&1 &
 wait
 
 check "alice receives snapshots" yes "$(grep  -q 'snaps/s=[1-9]' /tmp/alice.log && echo yes || echo no)"

@@ -7,6 +7,10 @@ services:
     init: true
     environment:
       MM_SECRET: ${MM_SECRET:-dev-secret-change-me}
+      REDIS_HOST: redis
+    depends_on:
+      redis:
+        condition: service_healthy
     ports:
       - "8080:8080"
     restart: unless-stopped
@@ -27,3 +31,18 @@ services:
     ports:
       - "9000:9000/udp"
     restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  redis-data:

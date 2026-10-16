@@ -6,4 +6,6 @@ target_include_directories(matchmaker PRIVATE
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
-target_link_libraries(matchmaker PRIVATE Threads::Threads OpenSSL::Crypto controlnet)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HIREDIS REQUIRED IMPORTED_TARGET hiredis)
+target_link_libraries(matchmaker PRIVATE Threads::Threads OpenSSL::Crypto controlnet PkgConfig::HIREDIS)
