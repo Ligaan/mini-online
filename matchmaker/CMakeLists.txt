@@ -6,4 +6,4 @@ target_include_directories(matchmaker PRIVATE
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
-target_link_libraries(matchmaker PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(matchmaker PRIVATE Threads::Threads OpenSSL::Crypto controlnet)

@@ -1,0 +1,22 @@
+syntax = "proto3";
+package control;
+
+message RegisterRequest {
+    string address = 1;
+    uint32 capacity = 2;
+}
+message RegisterReply {
+    string server_id = 1;
+}
+message HeartbeatRequest {
+    string server_id = 1;
+    uint32 players = 2;
+}
+message HeartbeatReply {
+    bool known = 1;
+}
+
+service Registry {
+    rpc Register(RegisterRequest) returns (RegisterReply);
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatReply);
+}

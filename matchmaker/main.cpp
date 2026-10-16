@@ -10,12 +10,58 @@
 #include <mutex>
 #include <algorithm>
 #include <condition_variable>
+#include "control.grpc.pb.h"
+#include <grpcpp/grpcpp.h>
+#include <memory>
 
 using json = nlohmann::json;
 
 struct Session{
     std::string id;
     std::vector<std::string> players;
+};
+
+struct GameServer {
+    std::string address;
+    uint32_t capacity = 0;
+    uint32_t players = 0;
+    std::chrono::steady_clock::time_point lastBeat;
+};
+
+class RegistryImpl final : public control::Registry::Service {
+    public:
+        RegistryImpl(std::mutex& m, std::map<std::string, GameServer>& s) : mtx_(m), servers_(s) {}
+
+        grpc::Status Register(grpc::ServerContext*, const control::RegisterRequest* req, control::RegisterReply* reply) override {
+            std::lock_guard<std::mutex> lock(mtx_);
+            std::string id = "gs" + std::to_string(nextId_++);
+            GameServer gs;
+            gs.address = req->address();
+            gs.capacity = req->capacity();
+            gs.lastBeat = std::chrono::steady_clock::now();
+            servers_[id]= gs;
+            reply->set_server_id(id);
+            std::printf("game server %s registered at %s\n", id.c_str(), gs.address.c_str());
+            return grpc::Status::OK;
+        }
+
+        grpc::Status Heartbeat(grpc::ServerContext*, const control::HeartbeatRequest* req, control::HeartbeatReply* reply) override {
+            std::lock_guard<std::mutex> lock(mtx_);
+            auto it = servers_.find(req->server_id());
+            if(it == servers_.end()){
+                reply->set_known(false);
+                return grpc::Status::OK;
+            }
+            it->second.players = req->players();
+            it->second.lastBeat = std::chrono::steady_clock::now();
+            reply->set_known(true);
+            return grpc::Status::OK;
+        }
+
+    private:
+        std::mutex& mtx_;
+        std::map<std::string, GameServer>& servers_;
+        int nextId_ = 1;
 };
 
 bool verifyToken(const httplib::Request& req, const std::string& secret, std::string& playerOut){
@@ -57,6 +103,16 @@ int main(){
     std::map<std::string, std::string> playerSession;
     int nextSession = 1;
 
+    std::mutex serversMtx;
+    std::map<std::string, GameServer> servers;
+    RegistryImpl registry(serversMtx, servers);
+
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort("0.0.0.0:50051", grpc::InsecureServerCredentials());
+    builder.RegisterService(&registry);
+    std::unique_ptr<grpc::Server> grpcServer = builder.BuildAndStart();
+    std::printf("registry gRPC on 50051\n");
+
     const char* envSecret = std::getenv("MM_SECRET");
     std::string secret = envSecret ? envSecret : "dev-secret-change-me";
     const char* envAddr = std::getenv("MM_GAME_ADDR");
@@ -72,6 +128,21 @@ int main(){
     });
 
     std::printf("matchmaker listening on 8080\n");
+
+    svr.Get("/servers", [&](const httplib::Request&, httplib::Response& res){
+        std::lock_guard<std::mutex> lock(serversMtx);
+        auto now = std::chrono::steady_clock::now();
+        json arr = json::array();
+        for(const auto& kv:servers){
+            long age = std::chrono::duration_cast<std::chrono::seconds>(now - kv.second.lastBeat).count();
+            arr.push_back({
+                    {"id", kv.first},{"address",kv.second.address},
+                    {"capacity", kv.second.capacity}, {"players",kv.second.players},
+                    {"last_beat_s_ago", age}, {"alive", age <= 6}
+                });
+        }
+        res.set_content(arr.dump(), "application/json");
+    });
     
     svr.Post("/login", [&secret](const httplib::Request& req, httplib::Response& res){
         json body = json::parse(req.body, nullptr,false);
