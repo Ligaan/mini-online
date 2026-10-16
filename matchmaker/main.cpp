@@ -171,7 +171,7 @@ int main(){
             arr.push_back({
                     {"id", kv.first},{"address",kv.second.address},
                     {"capacity", kv.second.capacity}, {"players",kv.second.players},
-                    {"last_beat_s_ago", age}, {"alive", age <= 6}, {"address", kv.second.controlAddress}
+                    {"last_beat_s_ago", age}, {"alive", age <= 6}, {"control_address", kv.second.controlAddress}
                 });
         }
         res.set_content(arr.dump(), "application/json");
