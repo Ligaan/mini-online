@@ -19,6 +19,7 @@ using json = nlohmann::json;
 struct Session{
     std::string id;
     std::vector<std::string> players;
+    std::string serverAddr;
 };
 
 struct GameServer {
@@ -107,6 +108,21 @@ int main(){
     std::map<std::string, GameServer> servers;
     RegistryImpl registry(serversMtx, servers);
 
+    auto pickServer = [&](std::string& addrOut) -> bool {
+        std::lock_guard<std::mutex> lock(serversMtx);
+        auto now = std::chrono::steady_clock::now();
+        const GameServer* best = nullptr;
+        for(const auto& kv:servers){
+            const GameServer& g = kv.second;
+            if(now - g.lastBeat > std::chrono::seconds(6)) continue;
+            if(g.players + 2 > g.capacity) continue;
+            if(!best || g.players < best->players) best = &g;
+        }
+        if(!best) return false;
+        addrOut = best->address;
+        return true;
+    };
+
     grpc::ServerBuilder builder;
     builder.AddListeningPort("0.0.0.0:50051", grpc::InsecureServerCredentials());
     builder.RegisterService(&registry);
@@ -115,11 +131,9 @@ int main(){
 
     const char* envSecret = std::getenv("MM_SECRET");
     std::string secret = envSecret ? envSecret : "dev-secret-change-me";
-    const char* envAddr = std::getenv("MM_GAME_ADDR");
-    std::string gameAddr = envAddr ? envAddr : "127.0.0.1:9000";
 
     auto matchJson = [&](const Session& s, const std::string& player){
-        return json{{"status","matched"},{"session",s.id},{"server",gameAddr},
+        return json{{"status","matched"},{"session",s.id},{"server",s.serverAddr},
                     {"players",s.players},{"ticket",makeTicket(secret, player, s.id)}};
     };
 
@@ -192,8 +206,17 @@ int main(){
             return;
         }
 
+        std::string serverAddr;
+        if(!pickServer(serverAddr)){
+            waiting.pop_back();
+            res.status = 503;
+            res.set_content(json{{"error","no game server available"}}.dump(), "application/json");
+            return;
+        }
+
         Session s;
         s.id = std::to_string(nextSession++);
+        s.serverAddr= serverAddr;
         s.players = {waiting[0], waiting[1]};
         waiting.erase(waiting.begin(), waiting.begin() + 2);
         sessions[s.id] = s;
@@ -251,7 +274,7 @@ int main(){
             return;
         }
 
-        res.set_content(json{{"id",it->second.id},{"players",it->second.players}}.dump(),"application/json");
+        res.set_content(json{{"id",it->second.id},{"players",it->second.players},{"server", it->second.serverAddr}}.dump(),"application/json");
     });
 
     svr.WebSocket("/ws", [&](const httplib::Request& req, httplib::ws::WebSocket& ws){
