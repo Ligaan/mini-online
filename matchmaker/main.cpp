@@ -14,6 +14,7 @@
 #include <grpcpp/grpcpp.h>
 #include <memory>
 #include "hiredis/hiredis.h"
+#include <random>
 
 using json = nlohmann::json;
 
@@ -164,11 +165,19 @@ bool verifyToken(const httplib::Request& req, const std::string& secret, std::st
     }
 }
 
+std::string randomId(){
+    std::random_device rd;
+    char buf[33];
+    std::snprintf(buf, sizeof(buf), "%08x%08x%08x%08x", rd(), rd(), rd(), rd());
+    return buf;
+}
+
 std::string makeTicket(const std::string& secret, const std::string& player, const std::string& sid){
     auto now = std::chrono::system_clock::now();
     return jwt::create()
         .set_type("JWT")
         .set_subject(player)
+        .set_id(randomId())
         .set_audience("game-server")
         .set_payload_claim("sid", jwt::claim(sid))
         .set_issued_at(now)

@@ -43,7 +43,7 @@ constexpr float INPUT_REFILL = 1.1f;
 constexpr float INPUT_BURST = 5.0f;
 
 
-bool verifyTicket(const std::string& token, const std::string& secret, std::string& playerOut, std::string& sidOut){
+bool verifyTicket(const std::string& token, const std::string& secret, std::string& playerOut, std::string& sidOut, std::string& jtiOut){
     try{
         auto decoded = jwt::decode(token);
         auto verifier = jwt::verify()
@@ -52,6 +52,7 @@ bool verifyTicket(const std::string& token, const std::string& secret, std::stri
         verifier.verify(decoded);
         playerOut = decoded.get_subject();
         sidOut = decoded.get_payload_claim("sid").as_string();
+        jtiOut = decoded.get_id();
         return true;
     } catch (const std::exception&) {
         return false;
@@ -61,6 +62,11 @@ bool verifyTicket(const std::string& token, const std::string& secret, std::stri
 struct AllowedSessions{
     std::mutex mtx;
     std::map<std::string,std::set<std::string>> sessions;
+};
+
+struct UsedTicket{
+    uint64_t key;
+    std::chrono::steady_clock::time_point expires;
 };
 
 class GameControlImpl final : public control::GameControl::Service {
@@ -181,6 +187,7 @@ int main(){
     char buf[1500];
 
     std::unordered_map<uint64_t, ClientInfo> clients;
+    std::map<std::string, UsedTicket> usedTickets;
 
     auto nextTick = Clock::now() + TICK;
     uint64_t tickCount = 0;
@@ -222,8 +229,8 @@ int main(){
             auto now = Clock::now();
 
             if(msg.has_join()){
-                std::string player, sid;
-                if(!verifyTicket(msg.join().ticket(), secret, player, sid)){
+                std::string player, sid, jti;
+                if(!verifyTicket(msg.join().ticket(), secret, player, sid, jti)){
                     std::printf("rejected join from %s:%d\n", ip, ntohs(from.sin_port));
                     continue;
                 }
@@ -234,6 +241,25 @@ int main(){
                         std::printf("rejected join: %s is not allocated to session %s\n",player.c_str(), sid.c_str());
                         continue;
                     }
+                }
+                bool duplicate = false;
+                for(const auto& entry:clients){
+                    if(entry.second.player == player && entry.first != key){
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if(duplicate){
+                    std::printf("rejected join: %s already connected from another address\n", player.c_str());
+                    continue;
+                }
+                auto ut = usedTickets.find(jti);
+                if(ut != usedTickets.end() && ut->second.key != key){
+                    std::printf("rejected join: ticket already used from another address\n");
+                    continue;
+                }
+                if(ut == usedTickets.end()){
+                    usedTickets[jti] = UsedTicket{key, now + std::chrono::seconds(60)};
                 }
                 if(clients.find(key) == clients.end()){
                     std::printf("player %s joined session %s from %s:%d\n", 
@@ -295,6 +321,14 @@ int main(){
             }
 
             if(tickCount % 30 == 0){
+                auto nowT = Clock::now();
+                for(auto it = usedTickets.begin();it != usedTickets.end();){
+                    if(it->second.expires < nowT){
+                        it = usedTickets.erase(it);
+                    }else{
+                        ++it;
+                    }
+                }
                 std::printf("tick %llu\n",(unsigned long long)tickCount);
             }
             
