@@ -241,11 +241,18 @@ int main(){
 
             if(msg.has_join()){
                 std::string player, sid, jti;
+                if(msg.join().ticket().size() > 512){
+                    ++m.rejectedJoins;
+                    continue;
+                }
+
                 if(!verifyTicket(msg.join().ticket(), secret, player, sid, jti)){
                     //std::printf("rejected join from %s:%d\n", ip, ntohs(from.sin_port));
                     ++m.rejectedJoins;
                     continue;
                 }
+
+
                 {
                     std::lock_guard<std::mutex> lock(allowed.mtx);
                     auto s = allowed.sessions.find(sid);
@@ -335,10 +342,6 @@ int main(){
             for(auto& entry:clients){
                 ClientInfo& c = entry.second;
                 c.budget = std::min(c.budget + INPUT_REFILL, INPUT_BURST);
-                if(tickCount % 30 == 0 && c.dropped > 0){
-                    std::printf("rate limit: %s dropped %u inputs\n", c.player.c_str(), c.dropped);
-                    c.dropped = 0;
-                }
             }
 
             if(tickCount % 30 == 0){
