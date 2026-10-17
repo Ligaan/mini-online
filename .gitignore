@@ -1,4 +1,7 @@
 build/
-build.log
 build-win/
+build-asan/
 vcpkg_installed/
+*.log
+*.pcap
+.env

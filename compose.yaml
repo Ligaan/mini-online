@@ -11,6 +11,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "8080:8080"
     restart: unless-stopped
@@ -28,6 +33,11 @@ services:
       MM_GRPC_ADDR: matchmaker:50051
       GAME_CONTROL_ADDR: gameserver:50052
       GAME_PUBLIC_ADDR: ${PI_ADDR:-192.168.137.129}:9000
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "9000:9000/udp"
     restart: unless-stopped
@@ -37,6 +47,11 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

@@ -35,6 +35,7 @@ struct ClientInfo {
     std::string player;
     float budget = 5.0f;
     uint32_t dropped = 0;
+    uint32_t inputsSec = 0;
 };
 
 using Clock = std::chrono::steady_clock;
@@ -67,6 +68,13 @@ struct AllowedSessions{
 struct UsedTicket{
     uint64_t key;
     std::chrono::steady_clock::time_point expires;
+};
+
+struct Metrics{
+    uint64_t pktsIn = 0, bytesIn = 0, pktsOut = 0;
+    uint64_t bad = 0, rejectedJoins = 0;
+    uint64_t inputsApplied = 0, inputsLimited = 0;
+    double maxTickLateMs = 0;
 };
 
 class GameControlImpl final : public control::GameControl::Service {
@@ -115,7 +123,7 @@ void registryLoop(std::string target, std::string publicAddr, std::string contro
             control::HeartbeatReply reply;
             grpc::Status st = stub->Heartbeat(&ctx, req, &reply);
             if(!st.ok()){
-                std::printf("heatbeat failed: %s\n", st.error_message().c_str());
+                std::printf("heartbeat failed: %s\n", st.error_message().c_str());
             }else if(!reply.known()){
                 std::printf("registry forgot us, re-registering\n");
                 serverId.clear();
@@ -188,6 +196,7 @@ int main(){
 
     std::unordered_map<uint64_t, ClientInfo> clients;
     std::map<std::string, UsedTicket> usedTickets;
+    Metrics m;
 
     auto nextTick = Clock::now() + TICK;
     uint64_t tickCount = 0;
@@ -216,10 +225,12 @@ int main(){
                 perror("recvfrom");
                 break;
             }
+            ++m.pktsIn;
+            m.bytesIn += (uint64_t)n;
 
             game::ClientMessage msg;
             if(!msg.ParseFromArray(buf, (int)n)){
-                std::printf("bad packet\n");
+                ++m.bad;
                 continue;
             }
 
@@ -231,14 +242,16 @@ int main(){
             if(msg.has_join()){
                 std::string player, sid, jti;
                 if(!verifyTicket(msg.join().ticket(), secret, player, sid, jti)){
-                    std::printf("rejected join from %s:%d\n", ip, ntohs(from.sin_port));
+                    //std::printf("rejected join from %s:%d\n", ip, ntohs(from.sin_port));
+                    ++m.rejectedJoins;
                     continue;
                 }
                 {
                     std::lock_guard<std::mutex> lock(allowed.mtx);
                     auto s = allowed.sessions.find(sid);
                     if(s == allowed.sessions.end() || !s->second.count(player)){
-                        std::printf("rejected join: %s is not allocated to session %s\n",player.c_str(), sid.c_str());
+                        //std::printf("rejected join: %s is not allocated to session %s\n",player.c_str(), sid.c_str());
+                        ++m.rejectedJoins;
                         continue;
                     }
                 }
@@ -250,12 +263,14 @@ int main(){
                     }
                 }
                 if(duplicate){
-                    std::printf("rejected join: %s already connected from another address\n", player.c_str());
+                    //std::printf("rejected join: %s already connected from another address\n", player.c_str());
+                    ++m.rejectedJoins;
                     continue;
                 }
                 auto ut = usedTickets.find(jti);
                 if(ut != usedTickets.end() && ut->second.key != key){
-                    std::printf("rejected join: ticket already used from another address\n");
+                    //std::printf("rejected join: ticket already used from another address\n");
+                    ++m.rejectedJoins;
                     continue;
                 }
                 if(ut == usedTickets.end()){
@@ -282,6 +297,7 @@ int main(){
 
                 if(c.budget < 1.0f){
                     ++c.dropped;
+                    ++m.inputsLimited;
                     continue;
                 }
                 c.budget -= 1.0f;
@@ -290,6 +306,8 @@ int main(){
                 int dx = std::clamp(in.dx(), -1, 1);
                 int dy = std::clamp(in.dy(), -1, 1);
                 applyInput(c.x,c.y,(int8_t)dx,(int8_t)dy);
+                ++m.inputsApplied;
+                ++c.inputsSec;
                 c.lastSeq = in.seq();
             }
         }
@@ -307,6 +325,9 @@ int main(){
 
         
         if(Clock::now() >= nextTick){
+            double lateMs = std::chrono::duration<double, std::milli>(Clock::now() - nextTick).count();
+            if(lateMs > m.maxTickLateMs) m.maxTickLateMs = lateMs;
+
             nextTick += TICK;
             ++tickCount;
             playerCount =static_cast<uint32_t>(clients.size());
@@ -329,9 +350,22 @@ int main(){
                         ++it;
                     }
                 }
-                std::printf("tick %llu\n",(unsigned long long)tickCount);
+                //std::printf("tick %llu\n",(unsigned long long)tickCount);
+                std::printf("stats: players=%zu in=%llu pkt/s (%llu B/s) out=%llu bad=%llu rejected_joins=%llu inputs_ok=%llu rate_limited=%llu tickets=%zu max_tick_late=%.1fms\n",
+                        clients.size(),
+                        (unsigned long long)m.pktsIn, (unsigned long long)m.bytesIn,
+                        (unsigned long long)m.pktsOut, (unsigned long long)m.bad,
+                        (unsigned long long)m.rejectedJoins, (unsigned long long)m.inputsApplied,
+                        (unsigned long long)m.inputsLimited, usedTickets.size(), m.maxTickLateMs);
+                for(auto& entry : clients){
+                    std::printf("  %s inputs/s=%u\n", entry.second.player.c_str(), entry.second.inputsSec);
+                    entry.second.inputsSec = 0;
+                    entry.second.dropped = 0;
+                }
+                m = Metrics{};
             }
             
+
             game::Snapshot snap;
             snap.set_tick((uint32_t)tickCount);
             for(const auto& entry:clients){
@@ -350,6 +384,8 @@ int main(){
                 std::string bytes = snap.SerializeAsString();
                 if(sendto(fd, bytes.data(), bytes.size(), 0, (sockaddr*)&c.addr, sizeof(c.addr)) < 0){
                     perror("sendto");
+                }else{
+                    ++m.pktsOut;
                 }
             }
         }
