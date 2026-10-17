@@ -33,10 +33,15 @@ struct ClientInfo {
     uint32_t lastSeq = 0;
     uint32_t id = 0;
     std::string player;
+    float budget = 5.0f;
+    uint32_t dropped = 0;
 };
 
 using Clock = std::chrono::steady_clock;
 constexpr auto TICK = std::chrono::nanoseconds(1'000'000'000 / 30); // 30Hz
+constexpr float INPUT_REFILL = 1.1f;
+constexpr float INPUT_BURST = 5.0f;
+
 
 bool verifyTicket(const std::string& token, const std::string& secret, std::string& playerOut, std::string& sidOut){
     try{
@@ -249,6 +254,13 @@ int main(){
                 c.lastSeen = now;
                 if(in.seq() <= c.lastSeq) continue;
 
+                if(c.budget < 1.0f){
+                    ++c.dropped;
+                    continue;
+                }
+                c.budget -= 1.0f;
+                
+
                 int dx = std::clamp(in.dx(), -1, 1);
                 int dy = std::clamp(in.dy(), -1, 1);
                 applyInput(c.x,c.y,(int8_t)dx,(int8_t)dy);
@@ -272,6 +284,15 @@ int main(){
             nextTick += TICK;
             ++tickCount;
             playerCount =static_cast<uint32_t>(clients.size());
+
+            for(auto& entry:clients){
+                ClientInfo& c = entry.second;
+                c.budget = std::min(c.budget + INPUT_REFILL, INPUT_BURST);
+                if(tickCount % 30 == 0 && c.dropped > 0){
+                    std::printf("rate limit: %s dropped %u inputs\n", c.player.c_str(), c.dropped);
+                    c.dropped = 0;
+                }
+            }
 
             if(tickCount % 30 == 0){
                 std::printf("tick %llu\n",(unsigned long long)tickCount);

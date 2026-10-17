@@ -19,6 +19,7 @@ struct InputPacket {
 };
 
 constexpr float SPEED = 5.0f;
+constexpr float WORLD_LIMIT = 50.0f;
 constexpr float DT = 1.0f / 30.0f;
 constexpr uint32_t MAX_PLAYERS = 8;
 
@@ -37,6 +38,11 @@ struct SnapshotPacket {
 };
 
 inline void applyInput(float& x, float& y, int8_t dx, int8_t dy) {
-    x += dx * SPEED * DT;
-    y += dy * SPEED * DT;
+    float scale = (dx != 0 && dy != 0) ? 0.70710678f : 1.0f;
+    x += dx * SPEED * DT * scale;
+    y += dy * SPEED * DT * scale;
+    if(x > WORLD_LIMIT) x = WORLD_LIMIT;
+    if(x < -WORLD_LIMIT) x = -WORLD_LIMIT;
+    if(y > WORLD_LIMIT) y = WORLD_LIMIT;
+    if(y < -WORLD_LIMIT) y = -WORLD_LIMIT;
 }

@@ -26,6 +26,10 @@ int main(int argc, char** argv){
         std::printf("usage: client <server-ip> <ticket>\n");
         return 1;
     }
+
+    bool cheat = argc > 3 && std::strcmp(argv[3], "cheat") == 0;
+    uint32_t cheatSeq = 0;
+
     game::ClientMessage joinMsg;
     joinMsg.mutable_join()->set_ticket(argv[2]);
     std::string joinBytes = joinMsg.SerializeAsString();
@@ -179,23 +183,24 @@ int main(int argc, char** argv){
                 if(sendto(fd,joinBytes.data(),(int)joinBytes.size(),0,(sockaddr*)&addr, (int)sizeof(addr))<0)
                     net_perror("sendto");
             }else{
+                for(int k = 0; k < (cheat ? 3 : 1); ++k){
+                    pkt.seq = cheat ? ++cheatSeq : (uint32_t)tickCount;
+                    pkt.dx = cheat ? 1 : ((tickCount / 90) % 2 == 0) ? 1 : -1;
+                    pkt.dy = 0;
+                    
+                    applyInput(px, py, pkt.dx, pkt.dy);
+                    pending.push_back(pkt);
+                    if (pending.size() > 120) pending.pop_front();
 
-                pkt.seq = tickCount;
-                pkt.dx = ((tickCount / 90) % 2 == 0) ? 1 : -1;
-                pkt.dy = 0;
-                
-                applyInput(px, py, pkt.dx, pkt.dy);
-                pending.push_back(pkt);
-                if (pending.size() > 120) pending.pop_front();
-
-                game::ClientMessage msg;
-                game::Input* in = msg.mutable_input();
-                in->set_seq(pkt.seq);
-                in->set_dx(pkt.dx);
-                in->set_dy(pkt.dy);
-                std::string bytes = msg.SerializeAsString();
-                if(sendto(fd, bytes.data(),(int)bytes.size(), 0, (sockaddr*)&addr, (int)sizeof(addr)) < 0){
-                    net_perror("senddto");
+                    game::ClientMessage msg;
+                    game::Input* in = msg.mutable_input();
+                    in->set_seq(pkt.seq);
+                    in->set_dx(pkt.dx);
+                    in->set_dy(pkt.dy);
+                    std::string bytes = msg.SerializeAsString();
+                    if(sendto(fd, bytes.data(),(int)bytes.size(), 0, (sockaddr*)&addr, (int)sizeof(addr)) < 0){
+                        net_perror("senddto");
+                    }
                 }
             }
             double elapsed = std::chrono::duration<double>(Clock::now()-lastRecvTime).count();
